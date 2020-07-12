@@ -7,6 +7,7 @@
 
 #include "SDL.h"
 #include "SDL_image.h"
+#include "SDL_mixer.h"
 #include "SDL_ttf.h"
 
 #pragma warning(push)
@@ -25,49 +26,58 @@ using namespace std;
 using namespace std::chrono;
 using namespace glm;
 
-static constexpr int WINDOW_WIDTH = 1280;
-static constexpr int WINDOW_HEIGHT = 720;
+constexpr int WINDOW_WIDTH = 1280;
+constexpr int WINDOW_HEIGHT = 720;
 
-static constexpr int BALL_RADIUS = 16;
+constexpr int BALL_RADIUS = 16;
 
-static float max_speed = 1.0f;
-static const float initial_spring_coefficient = 0.5f;
-static float spring_coefficient = initial_spring_coefficient;
-static const float initial_transverse_damping_coefficient = 0.05f; // must be in range [0, 1]
-static float transverse_damping_coefficient = initial_transverse_damping_coefficient;
-static const float initial_tangent_damping_coefficient = 0.06f;  // must be in range [0, 1]
-static float tangent_damping_coefficient = initial_tangent_damping_coefficient;
-static float ball_mass = 1.0f;
+float max_speed = 1.0f;
+const float initial_spring_coefficient = 0.5f;
+float spring_coefficient = initial_spring_coefficient;
+const float initial_transverse_damping_coefficient = 0.05f; // must be in range [0, 1]
+float transverse_damping_coefficient = initial_transverse_damping_coefficient;
+const float initial_tangent_damping_coefficient = 0.06f;  // must be in range [0, 1]
+float tangent_damping_coefficient = initial_tangent_damping_coefficient;
+float ball_mass = 1.0f;
 
-static vec2 ball_position(0, 0);
-static vec2 ball_velocity(0, 0);
-static SDL_Point mouse_position = { 0, 0 };
-static SDL_Texture* ball_sprite = nullptr;
+vec2 ball_position(0, 0);
+vec2 ball_velocity(0, 0);
+SDL_Point mouse_position = { 0, 0 };
+SDL_Texture* ball_sprite = nullptr;
 
-static constexpr int TARGET_SIZE = 32;
-static vec2 target_position(0, 0);
-static SDL_Texture* target_sprite = nullptr;
+constexpr int TARGET_SIZE = 32;
+vec2 target_position(0, 0);
+SDL_Texture* target_sprite = nullptr;
 
-static SDL_Texture* gmtk_logo_sprite = nullptr;
+SDL_Texture* gmtk_logo_sprite = nullptr;
 
-static int score = 0;
-static bool done = false;
+int score = 0;
+bool done = false;
 
-static mt19937_64 random_engine;
-static uniform_real_distribution<float> random_float01 { 0.0f, 1.0f };
+mt19937_64 random_engine;
+uniform_real_distribution<float> random_float01 { 0.0f, 1.0f };
 
-static TTF_Font* font18;
-static TTF_Font* font24;
-static TTF_Font* font48;
-static TTF_Font* font72;
+TTF_Font* font18 = nullptr;
+TTF_Font* font24 = nullptr;
+TTF_Font* font48 = nullptr;
+TTF_Font* font72 = nullptr;
 
-static time_point<high_resolution_clock> last_update_time;
-static float target_time_bonus = 1.0f;
-static float max_time_available = 3.0f;
-static float time_remaining = 0.0f;
+Mix_Chunk* target_audio = nullptr;
+Mix_Chunk* heartbeat_audio = nullptr;
+
+const float initial_time_until_next_heartbeat = 0.8f;
+const float heartbeat_time_scale = 0.85f;
+float last_time_until_next_heartbeat = 0.0f;
+float time_until_next_heartbeat = 0.0f;
+
+time_point<high_resolution_clock> last_update_time;
+float target_time_bonus = 1.0f;
+float max_time_available = 3.0f;
+float time_remaining = 0.0f;
 
 
-static void Quit(int rc)
+
+void Quit(int rc)
 {
 	exit(rc);
 }
@@ -112,6 +122,31 @@ void LoadAssets(SDL_Renderer& renderer)
 	{
 		Quit(2);
 	}
+
+	const char* fontFilename = "assets/FFF_Tusj.ttf";
+	font18 = TTF_OpenFont(fontFilename, 18);
+	font24 = TTF_OpenFont(fontFilename, 24);
+	font48 = TTF_OpenFont(fontFilename, 48);
+	font72 = TTF_OpenFont(fontFilename, 72);
+	if (!font18 || !font24 || !font48 || !font72)
+	{
+		SDL_Log("Failed to open TTF font %s: %s\n", fontFilename, TTF_GetError());
+		Quit(2);
+	}
+
+	//heartbeat_audio = Mix_LoadWAV("assets/410378__b-train__heartbeat-looper.wav");
+ //   if (!heartbeat_audio)
+ //   {
+	//	SDL_Log("Failed to open heartbeat audio file: %s\n", Mix_GetError());
+	//	Quit(2);
+ //   }
+    
+    target_audio = Mix_LoadWAV("assets/268756__morrisjm__dingaling.mp3");
+    if (!target_audio)
+    {
+		SDL_Log("Failed to open target audio file: %s\n", Mix_GetError());
+		Quit(2);
+    }
 }
 
 vec2 GenerateTargetPosition()
@@ -142,6 +177,9 @@ void Reset()
 
 	time_remaining = max_time_available;
 	last_update_time = high_resolution_clock::now();
+
+	last_time_until_next_heartbeat = initial_time_until_next_heartbeat;
+	time_until_next_heartbeat = 0.0f;
 }
 
 
@@ -182,6 +220,16 @@ void Update(float time_delta)
 		tangent_damping_coefficient *= 0.9f;
 		//time_remaining = std::clamp(time_remaining + target_time_bonus, 0.0f, max_time_available);
 		time_remaining = max_time_available;
+		Mix_PlayChannel(-1, target_audio, 0 );
+		last_time_until_next_heartbeat = initial_time_until_next_heartbeat;
+	}
+
+	time_until_next_heartbeat -= time_delta;
+	if (time_until_next_heartbeat <= 0.0f)
+	{
+		//Mix_PlayChannel(-1, heartbeat_audio, 0 );
+		time_until_next_heartbeat = last_time_until_next_heartbeat * heartbeat_time_scale;
+		last_time_until_next_heartbeat = time_until_next_heartbeat;
 	}
 }
 
@@ -207,7 +255,8 @@ void DrawScene(SDL_Renderer& renderer)
 	SDL_RenderFillRect(&renderer, &time_bar);
 }
 
-void DrawText(SDL_Renderer& renderer, TTF_Font& font, int position_x, int position_y, const char* text, SDL_Color color)
+enum class TextAlignment { Left, Center, Right };
+void DrawText(SDL_Renderer& renderer, TTF_Font& font, int position_x, int position_y, const char* text, TextAlignment textAlignment, SDL_Color color)
 {
 	SDL_Surface *surface = TTF_RenderText_Solid(&font, text, color);
 	if (!surface)
@@ -224,7 +273,13 @@ void DrawText(SDL_Renderer& renderer, TTF_Font& font, int position_x, int positi
 		return;
 	}
 
-	SDL_Rect rect = { position_x, position_y, surface->w, surface->h };
+	int left_position = position_x;
+	if (textAlignment == TextAlignment::Center)
+		left_position = position_x - surface->w / 2;
+	else if (textAlignment == TextAlignment::Right)
+		left_position = position_x - surface->w;
+
+	SDL_Rect rect = { left_position, position_y, surface->w, surface->h };
 	SDL_RenderCopy(&renderer, texture, NULL, &rect);
 	SDL_DestroyTexture(texture);
 }
@@ -232,8 +287,12 @@ void DrawText(SDL_Renderer& renderer, TTF_Font& font, int position_x, int positi
 void DrawFrontEnd(SDL_Renderer& renderer)
 {
 	const SDL_Color color = {0x25, 0x5c, 0x99, 0xff};
-	DrawText(renderer, *font72, WINDOW_WIDTH / 2 - 220, WINDOW_HEIGHT / 2 - 150, "Spring It On", color);
-	DrawText(renderer, *font48, WINDOW_WIDTH / 2 - 240, WINDOW_HEIGHT / 2 - 50, "Press SPACE to start", color);
+	DrawText(renderer, *font72, WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 - 150, "Spring It On", TextAlignment::Center, color);
+	DrawText(renderer, *font48, WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 - 50, "Press SPACE to start", TextAlignment::Center, color);
+
+	DrawText(renderer, *font24, WINDOW_WIDTH / 2, WINDOW_HEIGHT - 104, "Written by Philip Dunstan", TextAlignment::Center, color);
+	DrawText(renderer, *font24, WINDOW_WIDTH / 2, WINDOW_HEIGHT - 72, "Tested by Katherine Thomson", TextAlignment::Center, color);
+	DrawText(renderer, *font24, WINDOW_WIDTH / 2, WINDOW_HEIGHT - 40, "Source available at https://github.com/phildunstan/spring_it_on", TextAlignment::Center, color);
 }
 
 void DrawBackgroundUI(SDL_Renderer& renderer)
@@ -245,15 +304,16 @@ void DrawBackgroundUI(SDL_Renderer& renderer)
 void DrawUI(SDL_Renderer& renderer)
 {
 	const SDL_Color color = {0x25, 0x5c, 0x99, 0xff};
-	DrawText(renderer, *font48, WINDOW_WIDTH - 250, 10, fmt::format("Score: {: 3}", score).c_str(), color);
+	DrawText(renderer, *font48, WINDOW_WIDTH - 280, 10, fmt::format("Score:", score).c_str(), TextAlignment::Left, color);
+	DrawText(renderer, *font48, WINDOW_WIDTH - 30, 10, fmt::format("{}", score).c_str(), TextAlignment::Right, color);
 }
 
 void DrawDebugUI(SDL_Renderer& renderer)
 {
 	const SDL_Color color = { 0, 0, 0, 0xff };
-	DrawText(renderer, *font18, 10, 10, fmt::format("spring_coefficient -> {}", spring_coefficient).c_str(), color);
-	DrawText(renderer, *font18, 10, 30, fmt::format("transverse_damping_coefficient -> {}", transverse_damping_coefficient).c_str(), color);
-	DrawText(renderer, *font18, 10, 50, fmt::format("tangent_damping_coefficient -> {}", tangent_damping_coefficient).c_str(), color);
+	DrawText(renderer, *font18, 10, 10, fmt::format("spring_coefficient -> {}", spring_coefficient).c_str(), TextAlignment::Left, color);
+	DrawText(renderer, *font18, 10, 30, fmt::format("transverse_damping_coefficient -> {}", transverse_damping_coefficient).c_str(), TextAlignment::Left, color);
+	DrawText(renderer, *font18, 10, 50, fmt::format("tangent_damping_coefficient -> {}", tangent_damping_coefficient).c_str(), TextAlignment::Left, color);
 }
  	
 void ProcessEvents()
@@ -323,16 +383,16 @@ int main(int /*argc*/, char** /*argv*/)
 
 	random_engine.seed(high_resolution_clock::now().time_since_epoch().count());
 
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER) != 0)
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_AUDIO) != 0)
 	{
-        SDL_Log("Unable to initialize SDL: %s", SDL_GetError());
+        SDL_Log("Failed to init SDL: %s", SDL_GetError());
 		Quit(1);
     }
 
 	constexpr int IMG_INIT_FLAGS = IMG_INIT_PNG;
 	if (IMG_Init(IMG_INIT_FLAGS) != (IMG_INIT_FLAGS))
 	{
-        SDL_Log("Failed to init required PNG support: %s", SDL_GetError());
+        SDL_Log("Failed to init required PNG support: %s", IMG_GetError());
 		Quit(1);
 	}
  	
@@ -342,14 +402,16 @@ int main(int /*argc*/, char** /*argv*/)
 		Quit(1);
 	}
  	
-	const char* fontFilename = "assets/FFF_Tusj.ttf";
-	font18 = TTF_OpenFont(fontFilename, 18);
-	font24 = TTF_OpenFont(fontFilename, 24);
-	font48 = TTF_OpenFont(fontFilename, 48);
-	font72 = TTF_OpenFont(fontFilename, 72);
-	if (!font18 || !font24 || !font48 || !font72)
+	constexpr int MIX_INIT_FLAGS = MIX_INIT_MP3;
+	if (Mix_Init(MIX_INIT_FLAGS) != MIX_INIT_FLAGS)
 	{
-		SDL_Log("Failed to open TTF font %s: %s\n", fontFilename, TTF_GetError());
+		SDL_Log("Failed to init required MP3 support: %s", Mix_GetError());
+		Quit(1);
+	}
+	if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0)
+	{
+		SDL_Log("Failed to init SDL_mixer: %s", Mix_GetError());
+		Quit(1);
 	}
 
 	SDL_Window* window = SDL_CreateWindow("Spring It On", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WINDOW_WIDTH, WINDOW_HEIGHT, 0);
